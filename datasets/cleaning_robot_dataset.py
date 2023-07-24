@@ -14,9 +14,9 @@ import PIL.Image as pil
 
 logger = logging.getLogger(__name__)
 
-class MideaDataset(GenericMVSDataset):
+class CleaningRobotDataset(GenericMVSDataset):
     """ 
-    Reads a Midea scan folder.
+    Reads a CleaningRobot scan folder.
     
     self.capture_metadata is a dictionary indexed with a scan's id and is 
     populated with a scan's frame information when a frame is loaded for the 
@@ -373,12 +373,7 @@ class MideaDataset(GenericMVSDataset):
 
         """
 
-        return os.path.join(
-                        self.dataset_path, 
-                        self.get_sub_folder_dir(self.split),
-                        scan_id,
-                        f"depth_{frame_id}.bin",
-                    )
+        return None
 
     def get_full_res_confidence_filepath(self, scan_id, frame_id):
         """ returns the filepath for a frame's depth confidence file at the 
@@ -394,12 +389,7 @@ class MideaDataset(GenericMVSDataset):
                 frame from the dataset.
 
         """
-        return os.path.join(
-                        self.dataset_path, 
-                        self.get_sub_folder_dir(self.split),
-                        scan_id,
-                        f"depthConfidence_{frame_id}.bin",
-                    )
+        return None
 
     def load_full_res_depth_and_mask(self, scan_id, frame_id):
         """ Loads a depth map at the native resolution the dataset provides.
@@ -417,29 +407,7 @@ class MideaDataset(GenericMVSDataset):
                 where depth is valid).
                 full_res_mask_b: like mask but boolean.
         """
-        full_res_depth_filepath = self.get_full_res_depth_filepath(
-                                                    scan_id, frame_id)
-
-        full_res_depth = torch.from_numpy(
-                                np.fromfile(
-                                    full_res_depth_filepath, dtype=np.float32
-                                ).reshape(-1, self.native_depth_width)
-                            ).unsqueeze(0)
-
-        confidence_filepath = self.get_full_res_confidence_filepath(scan_id,
-                                                                    frame_id)
-
-        conf = torch.from_numpy(
-                    np.fromfile(
-                        confidence_filepath, dtype=np.uint8
-                        ).reshape(-1, self.native_depth_width)).unsqueeze(0)
-        
-        full_res_mask_b = conf != 0
-        full_res_mask = full_res_mask_b.float()
-
-        full_res_depth[~full_res_mask_b] = torch.tensor(np.nan)
-
-        return full_res_depth, full_res_mask, full_res_mask_b
+        return None
 
     def get_color_filepath(self, scan_id, frame_id):
         """ returns the filepath for a frame's color file at the dataset's 

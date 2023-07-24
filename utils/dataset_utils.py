@@ -4,6 +4,7 @@ from datasets.scannet_dataset import ScannetDataset
 from datasets.seven_scenes_dataset import SevenScenesDataset
 from datasets.vdr_dataset import VDRDataset
 from datasets.scanniverse_dataset import ScanniverseDataset
+from datasets.cleaning_robot_dataset import CleaningRobotDataset
 
 def get_dataset(dataset_name, 
                 split_filepath,
@@ -127,6 +128,24 @@ def get_dataset(dataset_name,
             scans = [single_debug_scan_id]
 
         dataset_class = SevenScenesDataset
+
+        if verbose:
+            print(f"".center(80, "#"))
+            print(f" 7Scenes Dataset, number of scans: {len(scans)} ".center(80, "#"))
+            print(f"".center(80, "#"))
+            print("")
+
+    elif dataset_name == "cleaning_robot":
+        
+        # 读取数据集目录
+        with open(split_filepath) as file:
+            scans = file.readlines()
+            scans = [scan.strip() for scan in scans]
+
+        if single_debug_scan_id is not None:
+            scans = [single_debug_scan_id]
+
+        dataset_class = CleaningRobotDataset
 
         if verbose:
             print(f"".center(80, "#"))

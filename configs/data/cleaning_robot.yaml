@@ -1,0 +1,10 @@
+!!python/object:options.Options
+dataset_path: /home/mario/SIMPLE_RECON/data/cleaning_robot
+output_base_path: /home/mario/SIMPLE_RECON/data/cleaning_robot/ret 
+tuple_info_file_location: data_splits/cleaning_robot/
+dataset_scan_split_file: data_splits/cleaning_robot/times.txt
+dataset: cleaning_robot
+mv_tuple_file_suffix: _eight_view_deepvmvs_dense.txt
+num_images_in_tuple: 8
+frame_tuple_type: dense
+split: test
