@@ -6,3 +6,4 @@ logs
 models/*.ckpt
 weights/*.ckpt
 **__pycache__**
+.idea/

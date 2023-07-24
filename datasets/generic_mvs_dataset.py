@@ -631,7 +631,7 @@ class GenericMVSDataset(Dataset):
         # assemble the dataset element by getting all data for each frame
         inputs = []
         for _, frame_id in enumerate(frame_ids):
-            inputs += [self.get_frame(scan_id, frame_id, load_depth=True, flip=flip)]
+            inputs += [self.get_frame(scan_id, frame_id, load_depth=False, flip=flip)]
         
         # cur_data is the reference frame
         cur_data, *src_data_list = inputs
