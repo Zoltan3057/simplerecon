@@ -11,6 +11,7 @@ from torchvision import transforms
 from utils.geometry_utils import rotx
 from utils.generic_utils import read_image_file
 import PIL.Image as pil
+from scipy.spatial.transform import Rotation as R
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class CleaningRobotDataset(GenericMVSDataset):
             split,
             mv_tuple_file_suffix,
             include_full_res_depth=False,
-            limit_to_scan_id=None,
+            limit_to_time_id=None,
             num_images_in_tuple=None,
             color_transform=transforms.ColorJitter(0.2, 0.2, 0.2, 0.2),
             tuple_info_file_location=None,
@@ -54,7 +55,7 @@ class CleaningRobotDataset(GenericMVSDataset):
         super().__init__(dataset_path=dataset_path,
                 split=split, mv_tuple_file_suffix=mv_tuple_file_suffix, 
                 include_full_res_depth=include_full_res_depth, 
-                limit_to_scan_id=limit_to_scan_id,
+                limit_to_time_id=limit_to_time_id,
                 num_images_in_tuple=num_images_in_tuple, 
                 color_transform=color_transform, 
                 tuple_info_file_location=tuple_info_file_location, 
@@ -71,12 +72,10 @@ class CleaningRobotDataset(GenericMVSDataset):
             )
 
         self.capture_metadata = {}
-
         self.image_resampling_mode=pil.BICUBIC
+        self.load_metadata_flag = False
+        self.load_capture_metadata(time_id)
 
-    @staticmethod
-    def get_sub_folder_dir(split):
-        return "scans"
 
     def get_frame_id_string(self, frame_id):
         """ Returns an id string for this frame_id that's unique to this frame
@@ -87,89 +86,16 @@ class CleaningRobotDataset(GenericMVSDataset):
         """
         return frame_id
 
-    def get_valid_frame_path(self, split, scan):
-        """ returns the filepath of a file that contains valid frame ids for a 
-            scan. """
-        scan_dir = os.path.join(self.dataset_path, 
-                            self.get_sub_folder_dir(split), scan)
-
-        return os.path.join(scan_dir, "valid_frames.txt")
-
-    def get_valid_frame_ids(self, split, scan, store_computed=True):
-        """ Either loads or computes the ids of valid frames in the dataset for
-            a scan.
-            
-            A valid frame is one that has an existing RGB frame, an existing 
-            depth file, and existing pose file where the pose isn't inf, -inf, 
-            or nan.
-
-            Args:
-                split: the data split (train/val/test)
-                scan: the name of the scan
-                store_computed: store the valid_frame file where we'd expect to
-                see the file in the scan folder. get_valid_frame_path defines
-                where this file is expected to be. If the file can't be saved,
-                a warning will be printed and the exception reason printed.
-
-            Returns:
-                valid_frames: a list of strings with info on valid frames. 
-                Each string is a concat of the scan_id and the frame_id.
+    def get_valid_frame_ids(self, split, time_id, store_computed=True):
+        """ 根据pose的txt文件读取frame_id.
         """
-        scan = scan.rstrip("\n")
-        valid_frame_path = self.get_valid_frame_path(split, scan)
-
-        if os.path.exists(valid_frame_path):
-            # valid frame file exists, read that to find the ids of frames with 
-            # valid poses.
-            with open(valid_frame_path) as f:
-                valid_frames = f.readlines()
-        else:
-
-            print(f"Compuiting valid frames for scene {scan}.")
-            # find out which frames have valid poses 
-
-            # load scan metadata
-            self.load_capture_metadata(scan)
-            color_file_count = len(self.capture_metadata[scan])
-
-            valid_frames = []
-            dist_to_last_valid_frame = 0
-            bad_file_count = 0
-            for frame_ind in range(len(self.capture_metadata[scan])):
-                world_T_cam_44, _ = self.load_pose(scan, frame_ind)
-                if (np.isnan(np.sum(world_T_cam_44)) or 
-                    np.isinf(np.sum(world_T_cam_44)) or 
-                    np.isneginf(np.sum(world_T_cam_44))
-                ):
-                    bad_file_count+=1
-                    dist_to_last_valid_frame+=1
-                    continue
-
-                valid_frames.append(f"{scan} {frame_ind} {dist_to_last_valid_frame}")
-                dist_to_last_valid_frame = 0
-
-            print(f"Scene {scan} has {bad_file_count} bad frame files out of "
-                    f"{color_file_count}.")
-
-            # store computed if we're being asked, but wrapped inside a try 
-            # incase this directory is read only.
-            if store_computed:
-                # store those files to valid_frames.txt
-                try:
-                    with open(valid_frame_path, "w") as f:
-                        f.write('\n'.join(valid_frames) + '\n')
-                except Exception as e:
-                    print(f"Couldn't save valid_frames at {valid_frame_path}, "
-                        f"cause:")
-                    print(e)
-
-        return valid_frames
+        return self.valid_ids
         
-    def load_pose(self, scan_id, frame_id):
+    def load_pose(self, time_id, frame_id):
         """ Loads a frame's pose file.
 
             Args: 
-                scan_id: the scan this file belongs to.
+                time_id: the scan this file belongs to.
                 frame_id: id for the frame.
             
             Returns:
@@ -180,36 +106,31 @@ class CleaningRobotDataset(GenericMVSDataset):
 
         """
 
-        self.load_capture_metadata(scan_id)
-        frame_metadata = self.capture_metadata[scan_id][int(frame_id)]
-        
+        frame_pose = self.capture_metadata[time_id][int(frame_id)]
+        quat = frame_pose[:4]
+        translation = frame_pose[4:]
+        rotation_matrix = R.from_quat(quat).as_matrix()
+        world_T_body = np.identity(4)
+        world_T_body[:3, :3] = rotation_matrix
+        world_T_body[:3, 3] = translation
 
-        world_T_cam = torch.tensor(frame_metadata['pose4x4'], 
-                                            dtype=torch.float32).view(4, 4).T
-        gl_to_cv = torch.FloatTensor([[1, -1, -1, 1], [-1, 1, 1, -1], 
-                                    [-1, 1, 1, -1], [1, 1, 1, 1]])
-        world_T_cam *= gl_to_cv
-        world_T_cam = world_T_cam.numpy()
-        rot_mat = world_T_cam[:3,:3]
-        trans = world_T_cam[:3,3]
+        T_cb_GLOBAL = np.array([
+            [0, -1, 0, 0],
+            [0, 0, -1, 0.06],
+            [1, 0, 0, -0.16583],
+            [0, 0, 0, 1]
+        ])
 
-        rot_mat = rotx(-np.pi / 2) @ rot_mat
-        trans = rotx(-np.pi / 2) @ trans
-
-        world_T_cam[:3, :3] = rot_mat
-        world_T_cam[:3, 3] = trans
-        
-        world_T_cam = world_T_cam
+        world_T_cam = T_cb_GLOBAL * world_T_body.inverse();
         cam_T_world = np.linalg.inv(world_T_cam)
-
         return world_T_cam, cam_T_world
 
-    def load_intrinsics(self, scan_id, frame_id, flip=None):
+    def load_intrinsics(self, time_id, frame_id, flip=None):
         """ Loads intrinsics, computes scaled intrinsics, and returns a dict 
             with intrinsics matrices for a frame at multiple scales.
 
             Args: 
-                scan_id: the scan this file belongs to.
+                time_id: the scan this file belongs to.
                 frame_id: id for the frame. Not needed for ScanNet as images 
                 share intrinsics across a scene.
                 flip: unused
@@ -225,13 +146,17 @@ class CleaningRobotDataset(GenericMVSDataset):
             
         """
         output_dict = {}
+        intrinsic_txt_path = os.path.join(self.dataset_path, time_id, "camera_intrinsics.json")
+        with open(intrinsic_txt_path) as f:
+            intrinsic_data = json.load(f)
 
-        self.load_capture_metadata(scan_id)
-        frame_metadata = self.capture_metadata[scan_id][int(frame_id)]
-
-        image_width, image_height = frame_metadata['resolution']
+        image_width = 800
+        image_height = 600
         
-        fx, fy, cx, cy, _ = frame_metadata['intrinsics']
+        fx = intrinsic_data['intrinsic_800_600']['fx']
+        fy = intrinsic_data['intrinsic_800_600']['fy']
+        cx = intrinsic_data['intrinsic_800_600']['cx']
+        cy = intrinsic_data['intrinsic_800_600']['cy']
 
         K = torch.eye(4, dtype=torch.float32)
         K[0, 0] = float(fx)
@@ -263,158 +188,47 @@ class CleaningRobotDataset(GenericMVSDataset):
 
         return output_dict
 
-    def load_capture_metadata(self, scan_id):
-        """ Reads a vdr scan file and loads metadata for that scan into
-            self.capture_metadata
-
-            It does this by loading a metadata json file that contains frame 
-            RGB information, intrinsics, and poses for each frame.
-
-            Metadata for each scan is cached in the dictionary 
-            self.capture_metadata.
-
-            Args:
-                scan_id: a scan_id whose metadata will be read.
+    def load_capture_metadata(self, time_id):
+        """读取 txt pose 文件
         """
-        if scan_id in self.capture_metadata:
+        if self.load_metadata_flag:
             return
+        # 前四个是四元素，后面三个是位置
+        posetxt_path = os.path.join(self.dataset_path, time_id, "camera_pose_indexed.txt")
+        posetxt_data = np.loadtxt(posetxt_path, delimiter=',')
+        valid_ids = []
+        valid_ids_pose = []
+        metadata = dict()
+        for line in posetxt_data:
+            values = line.split(',')
+            valid_ids.append(int(values[0]))
+            valid_ids_pose.append([float(value) for value in values[1:]])
+            metadata[int(values[0])] = [float(value) for value in values[1:]]
+        self.capture_metadata[time_id] = metadata
+        self.valid_ids = np.array(valid_ids)
+        self.load_metadata_flag = True
 
-        metadata_path = os.path.join(
-                            self.dataset_path, 
-                            self.get_sub_folder_dir(self.split), 
-                            scan_id, 
-                            "capture.json",
-                        )
-
-        with open(metadata_path) as f:
-            capture_metadata = json.load(f)
-
-        self.capture_metadata[scan_id] = capture_metadata["frames"]
-
-    def get_cached_depth_filepath(self, scan_id, frame_id):
-        """ returns the filepath for a frame's depth file at the dataset's 
-            configured depth resolution.
-
-            Args: 
-                scan_id: the scan this file belongs to.
-                frame_id: id for the frame.
-            
-            Returns:
-                Either the filepath for a precached depth file at the size 
-                required, or if that doesn't exist, the full size depth frame 
-                from the dataset.
-
-        """
-        cached_resized_path = os.path.join(
-                                    self.dataset_path, 
-                                    self.get_sub_folder_dir(self.split),
-                                    scan_id,
-                                    f"depth.{self.depth_width}_{frame_id}.bin"
-                                )
-
-        # check if we have cached resized depth on disk first
-        if os.path.exists(cached_resized_path):
-            return cached_resized_path, False
-        
-        # instead return the default image
-        return os.path.join(
-                        self.dataset_path,
-                        self.get_sub_folder_dir(self.split),
-                        scan_id,
-                        f"depth_{frame_id}.bin",
-                    )
-
-    def get_cached_confidence_filepath(self, scan_id, frame_id):
-        """ returns the filepath for a frame's depth confidence file at the 
-            dataset's configured depth resolution.
-
-            Args: 
-                scan_id: the scan this file belongs to.
-                frame_id: id for the frame.
-            
-            Returns:
-                Either the filepath for a precached depth confidence file at the 
-                size required, or if that doesn't exist, the full size depth 
-                frame from the dataset.
-
-        """
-        cached_resized_path = os.path.join(
-                                    self.dataset_path, 
-                                    self.get_sub_folder_dir(self.split),
-                                    scan_id,
-                                    f"depthConfidence.{self.depth_width}_"
-                                        f"{frame_id}.bin",
-                                )
-
-        # check if we have cached resized depth on disk first
-        if os.path.exists(cached_resized_path):
-            return cached_resized_path
-        
-        # instead return the default image
-        return os.path.join(
-                        self.dataset_path,
-                        self.get_sub_folder_dir(self.split),
-                        scan_id, 
-                        f"depthConfidence_{frame_id}.bin",
-                    )
-
-    def get_full_res_depth_filepath(self, scan_id, frame_id):
-        """ returns the filepath for a frame's depth file at the native 
-            resolution in the dataset.
-
-            Args: 
-                scan_id: the scan this file belongs to.
-                frame_id: id for the frame.
-            
-            Returns:
-                Either the filepath for a precached depth file at the size 
-                required, or if that doesn't exist, the full size depth frame 
-                from the dataset.
-
-        """
-
+    def get_cached_depth_filepath(self, time_id, frame_id):
         return None
 
-    def get_full_res_confidence_filepath(self, scan_id, frame_id):
-        """ returns the filepath for a frame's depth confidence file at the 
-            dataset's maximum depth resolution.
-
-            Args: 
-                scan_id: the scan this file belongs to.
-                frame_id: id for the frame.
-            
-            Returns:
-                Either the filepath for a precached depth confidence file at the 
-                size required, or if that doesn't exist, the full size depth 
-                frame from the dataset.
-
-        """
+    def get_cached_confidence_filepath(self, time_id, frame_id):
         return None
 
-    def load_full_res_depth_and_mask(self, scan_id, frame_id):
-        """ Loads a depth map at the native resolution the dataset provides.
-
-            NOTE: This function will place NaNs where depth maps are invalid.
-
-            Args:
-                scan_id: the scan this file belongs to.
-                frame_id: id for the frame.
-                
-            Returns:
-                full_res_depth: depth map at the right resolution. Will contain 
-                    NaNs where depth values are invalid.
-                full_res_mask: a float validity mask for the depth maps. (1.0 
-                where depth is valid).
-                full_res_mask_b: like mask but boolean.
-        """
+    def get_full_res_depth_filepath(self, time_id, frame_id):
         return None
 
-    def get_color_filepath(self, scan_id, frame_id):
+    def get_full_res_confidence_filepath(self, time_id, frame_id):
+        return None
+
+    def load_full_res_depth_and_mask(self, time_id, frame_id):
+        return None
+
+    def get_color_filepath(self, time_id, frame_id):
         """ returns the filepath for a frame's color file at the dataset's 
             configured RGB resolution.
 
             Args: 
-                scan_id: the scan this file belongs to.
+                time_id: timestamp.
                 frame_id: id for the frame.
             
             Returns:
@@ -423,16 +237,6 @@ class CleaningRobotDataset(GenericMVSDataset):
                 from the dataset.
 
         """
-        scene_path = os.path.join(self.dataset_path,
-                                self.get_sub_folder_dir(self.split), scan_id)
-
-        cached_resized_path = os.path.join(scene_path, 
-                                    f"frame.{self.image_width}_{frame_id}.jpg")
-
-        # check if we have cached resized images on disk first
-        if os.path.exists(cached_resized_path):
-            return cached_resized_path
-        
+        scene_path = os.path.join(self.dataset_path, time_id)        
         # instead return the default image
-        return os.path.join(scene_path, 
-                        f"frame_{frame_id}.jpg")
+        return os.path.join(scene_path, f"{frame_id}.jpg")
